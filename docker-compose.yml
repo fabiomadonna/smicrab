@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: smicrab_postgres
+    environment:
+      POSTGRES_DB: smicrab
+      POSTGRES_USER: smicrab_user
+      POSTGRES_PASSWORD: smicrab_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+#      - ./init_db:/docker-entrypoint-initdb.d/
+    networks:
+      - smicrab_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smicrab_user -d smicrab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smicrab_backend
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=smicrab
+      - POSTGRES_USER=smicrab_user
+      - POSTGRES_PASSWORD=smicrab_password
+      # Ensure DATABASE_URL is set and uses asyncpg, e.g.:
+      # - DATABASE_URL=postgresql+asyncpg://smicrab_user:smicrab_password@postgres:5432/smicrab
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+      - ./datasets:/app/datasets  # Mount datasets directory (read-write for CSV generation)
+      - ./logs:/app/logs
+      - ./r_scripts:/app/r_scripts
+      - ./.env:/app/.env  # Mount environment file if it exists
+      - ./tmp/analysis:/tmp/analysis
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - smicrab_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 30s
+      start_period: 1200s  # Increased for R script processing and migrations
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: smicrab_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@smicrab.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+    networks:
+      - smicrab_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  smicrab_network:
+    driver: bridge
