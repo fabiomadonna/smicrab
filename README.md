@@ -161,7 +161,19 @@ cd smicrab_backend
 
 ## 4. Add Required Data
 
-* Add your `.nc` NetCDF files to the `datasets/` directory
+Add the following `.nc` NetCDF files to the `datasets/` directory:
+
+* `fg_ens_mean_0.1deg_reg_2011-2023_v30.0e_monthly_CF-1.8_corrected.nc`
+* `hu_ens_mean_0.1deg_reg_2011-2023_v29.0e_monthly_CF-1.8_corrected.nc`
+* `LST_IT_2011_2023_agg_Monthly_per_hour_grid_0.1_CF-1.8.nc`
+* `pp_ens_mean_0.1deg_reg_2011-2023_v29.0e_monthly_CF-1.8.nc`
+* `qq_ens_mean_0.1deg_reg_2011-2023_v29.0e_monthly_CF-1.8.nc`
+* `rr_ens_mean_0.1deg_reg_2011-2023_v29.0e_monthly_CF-1.8_corrected.nc`
+* `SAL_IT_2011-2023_Monthly_CMSAF_ERA5_CF-1.8_Reinterpolated.nc`
+* `tg_ens_mean_0.1deg_reg_2011-2023_v29.0e_monthly_CF-1.8_corrected.nc`
+* `tn_ens_mean_0.1deg_reg_2011-2023_v29.0e_monthly_CF-1.8_corrected.nc`
+* `tx_ens_mean_0.1deg_reg_2011-2023_v29.0e_monthly_CF-1.8_corrected.nc`
+* `C3S-LC-L4-LCCS-Map-300m-P1Y-2022-v2.1.1.area-subset.49.20.32.6.nc`
 
 ---
 
@@ -171,13 +183,47 @@ Follow these steps in order to run the project properly:
 
 ### Step 1: Create Environment File
 
-Copy the example environment file to start your configuration:
+Copy the example environment file to start your configuration. Most values have sensible defaults and can be used as-is. The main configuration you need to set is the `PROJECT_PATH`:
 
 ```bash
 cp .env.example .env
 ```
+Content of your `.env` file:
 
-Edit this file with your specific configuration values.
+```env
+# API Configuration
+API_V1_STR=/api/v1
+PROJECT_NAME=SMICRAB
+ENVIRONMENT=development
+
+# PostgreSQL Configuration
+POSTGRES_PORT=5432
+POSTGRES_DB=smicrab
+POSTGRES_USER=smicrab
+POSTGRES_PASSWORD=1234
+DATABASE_URL=postgresql+asyncpg://smicrab:1234@postgres:5432/smicrab
+
+# Logging
+LOG_LEVEL=INFO
+
+# pgAdmin Configuration
+PGADMIN_DEFAULT_EMAIL=admin@smicrab.com
+PGADMIN_DEFAULT_PASSWORD=admin123
+
+# Webhook Configuration
+WEBHOOK_URL=http://smicrab_backend:8000/api/v1/analysis/webhook/completion
+
+# Project Path (REQUIRED - Set this to your project root directory)
+PROJECT_PATH=/path/to/your/smicrab-backend
+
+# Analysis Resource Limits
+MEMORY_LIMIT_PER_ANALYSIS=4g
+CPU_LIMIT_PER_ANALYSIS=2.0
+```
+
+**Important**: Replace `/path/to/your/smicrab-backend` in `PROJECT_PATH` with the actual absolute path to your project root directory. For example:
+- Linux/macOS: `/home/mahan/codes/Italy/smicrab-backend`
+- Windows: `C:\Users\YourName\Projects\smicrab-backend`
 
 ### Step 2: Build the R Packages Base Image
 
@@ -289,15 +335,18 @@ smicrab-backend/
 API_V1_STR=/api/v1
 PROJECT_NAME=SMICRAB
 ENVIRONMENT=development
-POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
-POSTGRES_DB=<DB_NAME>
-POSTGRES_USER=<DB_USER>
-POSTGRES_PASSWORD=<DB_PASS>
-DATABASE_URL=postgresql+asyncpg://<DB_USER>:<DB_PASS>@<POSTGRES_HOST>:<POSTGRES_PORT>/<DB_NAME>
+POSTGRES_DB=smicrab
+POSTGRES_USER=smicrab
+POSTGRES_PASSWORD=1234
+DATABASE_URL=postgresql+asyncpg://smicrab:1234@postgres:5432/smicrab
 LOG_LEVEL=INFO
 PGADMIN_DEFAULT_EMAIL=admin@smicrab.com
-PGADMIN_DEFAULT_PASSWORD=admin123
+PGADMIN_DEFAULT_PASSWORD=123456
+WEBHOOK_URL=http://smicrab_backend:8000/api/v1/analysis/webhook/completion
+PROJECT_PATH=/home/mahan/codes/Italy/smicrab-backend
+MEMORY_LIMIT_PER_ANALYSIS=4g
+CPU_LIMIT_PER_ANALYSIS=2.0
 ```
 
 ---
@@ -322,6 +371,58 @@ docker images | grep smicrab
 ---
 
 ## 10. Additional Notes
+
+**Permission Issues**: If you encounter permission errors while running `.sh` scripts, ensure they have execution permissions:
+
+```bash
+find . -type f -name "*.sh" -exec chmod +x {} \;
+```
+
+**Rebuilding Images**: If you make changes to the R scripts or dependencies, you may need to rebuild the analysis images:
+
+```bash
+# Rebuild analysis packages (if R dependencies changed)
+docker build -f Dockerfile.analysis_packages -t smicrab-analysis-packages:latest . --no-cache
+
+# Rebuild analysis image (if server code changed)
+docker build -f Dockerfile.analysis -t smicrab-analysis:latest . --no-cache
+```
+
+---
+
+## 11. Auto Deployment Script (Alternative Deployment Method)
+
+> **⚠️ Important**: This is a **separate deployment method** that uses a different `.env` configuration and Docker images from a private registry. Follow the complete guide in `Auto_Deployment.md` before using this script.
+
+The `auto_deployment.sh` script is an automation tool that simplifies the entire deployment process for production environments.
+
+### What It Does:
+
+● Detects your OS (Linux, WSL, macOS, Windows)  
+● Validates `.env` file (uses different configuration than development setup)  
+● Pulls required Docker images from private registry  
+● Sets up containers and networks  
+● Applies database migrations  
+● Seeds initial data  
+● Starts backend and frontend containers  
+● Creates a default user: `user@smicrab.com` / `user123`  
+● Verifies services are running  
+
+### How to Use:
+
+```bash
+chmod +x auto_deployment.sh
+./auto_deployment.sh
+```
+
+### Requirements:
+
+⚠️ **Important Requirements:**
+● Must be run on **Linux or WSL (Windows Subsystem for Linux)**  
+● **Follow the complete setup guide in `Auto_Deployment.md` first**  
+● Uses a different `.env` configuration than the development setup  
+● **Requires access to the private Docker registry** - you need proper authentication and permissions to pull the required Docker images  
+● Use `pwd` to set `PROJECT_PATH` properly in the deployment `.env` file
 
 **Permission Issues**: If you encounter permission errors while running `.sh` scripts, ensure they have execution permissions:
 
