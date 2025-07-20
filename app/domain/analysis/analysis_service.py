@@ -12,6 +12,7 @@ from app.domain.analysis.analysis_dto import (
 from app.domain.integration.analysis_integration_service import (
     AnalysisIntegrationService,
 )
+from app.domain.analysis.container_service import ContainerService
 from app.infrastructure.repositories.analysis_repository import AnalysisRepository
 from app.utils import get_parameters_file, get_flag_file
 from app.utils.constants import (
@@ -31,15 +32,8 @@ from app.utils.enums import (
 
 from datetime import datetime
 from typing import Dict, Any, List
-import threading
-import subprocess
 import os
 import json
-import asyncio
-import time
-import requests
-import queue
-import concurrent.futures
 
 from core.config import settings
 
@@ -48,6 +42,7 @@ class AnalysisService:
     def __init__(self, repository: AnalysisRepository):
         self.repository = repository
         self.integration_service = AnalysisIntegrationService()
+        self.container_service = ContainerService()
 
     async def verify_analysis(self, analysis_id: str) -> Analysis:
         try:
@@ -176,7 +171,6 @@ class AnalysisService:
 
     async def run_analysis(self, analysis: Analysis) -> RunAnalysisResponse:
         try:
-
             # Retrieve model_type from the existing analysis
             model_type = analysis.model_type
 
@@ -200,22 +194,43 @@ class AnalysisService:
                         "Analysis is already completed. Create a new analysis to run again"
                     )
 
+            # Check if we can start a new container (max 3 concurrent)
+            if not self.container_service.can_start_new_container():
+                running_count = self.container_service.get_running_container_count()
+                raise ValueError(
+                    f"Cannot start analysis: Maximum concurrent analyses ({self.container_service.max_concurrent_containers}) "
+                    f"are already running. Currently running: {running_count}. Please wait for one to complete."
+                )
+
+            # Update status to in_progress
             analysis = await self.repository.update_status(
                 analysis.id, AnalyzeStatus.in_progress
             )
 
-            # Start step-by-step module execution in a background thread
-            self._start_module_execution_thread(str(analysis.id), model_type, analysis)
+            # Start analysis in Docker container
+            container_started = self.container_service.start_analysis_container(
+                str(analysis.id), 
+                model_type.value
+            )
+
+            if not container_started:
+                # Revert status if container failed to start
+                await self.repository.update_status(analysis.id, AnalyzeStatus.error)
+                await self.repository.add_error_message(
+                    str(analysis.id), 
+                    "Failed to start analysis container"
+                )
+                raise ValueError("Failed to start analysis container")
 
             Logger.info(
-                f"Analysis execution started for {analysis.id} with model {model_type.value}"
+                f"Analysis container started for {analysis.id} with model {model_type.value}"
             )
 
             return RunAnalysisResponse(
                 analysis_id=str(analysis.id),
                 status=analysis.status,
                 execution_started=True,
-                message=f"Analysis execution started with {model_type.value}",
+                message=f"Analysis execution started in container with {model_type.value}",
             )
 
         except Exception as e:
@@ -229,281 +244,9 @@ class AnalysisService:
             )
             raise e
 
-    def _start_module_execution_thread(
-        self, analysis_id: str, model_type: ModelType, analysis
-    ):
-        """Start step-by-step module execution in a background thread."""
+    # Thread-based execution methods removed - now using Docker containers
 
-        def module_execution_task():
-            try:
-                param_path = get_parameters_file(analysis_id)
-                flag_file = get_flag_file(analysis_id, model_type)
-
-                if os.path.exists(flag_file):
-                    os.remove(flag_file)
-
-                Logger.info(
-                    f"Starting step-by-step module execution for analysis {analysis_id}"
-                )
-
-                # Execute modules step by step
-                for i, module_progress in enumerate(MODULE_EXECUTION_ORDER):
-                    try:
-                        Logger.info(
-                            f"Starting module {module_progress.value} for analysis {analysis_id}"
-                        )
-
-                        # Execute the module (no database update here)
-                        success = self._execute_module(
-                            analysis_id, module_progress, param_path
-                        )
-
-                        if not success:
-                            Logger.error(
-                                f"Module {module_progress.value} failed for analysis {analysis_id}",
-                                context={
-                                    "task": "module_execution_task",
-                                    "module": module_progress.value,
-                                },
-                            )
-                            self._send_webhook(
-                                analysis_id,
-                                "error",
-                                settings.WEBHOOK_URL,
-                                f"Module {module_progress.value} execution failed",
-                            )
-                            return
-
-                        Logger.info(
-                            f"Module {module_progress.value} completed successfully for analysis {analysis_id}"
-                        )
-
-                        # Send webhook to update current module after successful completion
-                        module_update_payload = {
-                            "analysis_id": analysis_id,
-                            "status": "module_completed",
-                            "current_module": module_progress.value,
-                            "next_module": (
-                                MODULE_EXECUTION_ORDER[i + 1].value
-                                if i + 1 < len(MODULE_EXECUTION_ORDER)
-                                else "completed"
-                            ),
-                        }
-                        self._send_module_update_webhook(
-                            analysis_id, module_update_payload, settings.WEBHOOK_URL
-                        )
-
-                    except Exception as e:
-                        Logger.error(
-                            f"Error executing module {module_progress.value}: {e}",
-                            context={
-                                "task": "module_execution_task",
-                                "module": module_progress.value,
-                            },
-                        )
-                        self._send_webhook(
-                            analysis_id, "error", settings.WEBHOOK_URL, str(e)
-                        )
-                        return
-
-                # All modules completed successfully
-                Logger.info(
-                    f"All modules completed successfully for analysis {analysis_id}"
-                )
-
-                # Create final flag file
-                with open(flag_file, "w") as f:
-                    f.write("done")
-
-                # Send webhook to update database
-                self._send_webhook(analysis_id, "done", settings.WEBHOOK_URL)
-
-            except Exception as e:
-                Logger.error(
-                    f"Module execution thread failed: {e}",
-                    context={"task": "_start_module_execution_thread"},
-                )
-                self._send_webhook(analysis_id, "error", settings.WEBHOOK_URL, str(e))
-
-        thread = threading.Thread(target=module_execution_task)
-        thread.daemon = True
-        thread.start()
-
-    def _execute_module(
-        self, analysis_id: str, module_progress: ModuleProgress, param_path: str
-    ) -> bool:
-        """Execute a single R module with enhanced monitoring."""
-        try:
-            module_script = MODULE_SCRIPTS.get(module_progress)
-            if not module_script:
-                raise ValueError(f"No R script found for module: {module_progress}")
-
-            Logger.info(f"Executing module {module_progress.value}: {module_script}")
-
-            # Create module-specific flag file for monitoring
-            # module_flag_file = get_flag_file(analysis_id, module_name)
-            # # Remove existing flag file
-            # if os.path.exists(module_flag_file):
-            #     os.remove(module_flag_file)
-
-            # Execute the R script with timeout and monitoring
-            start_time = time.time()
-            process = subprocess.Popen(
-                ["Rscript", module_script, param_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-
-            # Monitor the process with timeout (30 minutes per module)
-            timeout = 3600 * 2  # 2 hours
-            check_interval = 5  # 5 seconds
-
-            while True:
-                # Check if process is still running
-                return_code = process.poll()
-                if return_code is not None:
-                    # Process finished
-                    stdout, stderr = process.communicate()
-                    if return_code == 0:
-                        Logger.info(
-                            f"Module {module_progress.value} completed successfully"
-                        )
-                        Logger.debug(f"Module {module_progress.value} stdout: {stdout}")
-                        return True
-                    else:
-                        Logger.error(
-                            f"Module {module_progress.value} failed with return code {return_code}",
-                            context={
-                                "task": "_execute_module",
-                                "module": module_progress.value,
-                                "stdout": stdout,
-                                "stderr": stderr,
-                            },
-                        )
-                        return False
-
-                # Check timeout
-                elapsed_time = time.time() - start_time
-                if elapsed_time > timeout:
-                    Logger.error(
-                        f"Module {module_progress.value} timed out after {timeout} seconds",
-                        context={
-                            "task": "_execute_module",
-                            "module": module_progress.value,
-                        },
-                    )
-                    process.terminate()
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                    return False
-
-                # Log progress every minute
-                if int(elapsed_time) % 60 == 0:
-                    Logger.info(
-                        f"Analyze: {analysis_id} - Module {module_progress.value} still running... ({int(elapsed_time / 60)} min)"
-                    )
-
-                time.sleep(check_interval)
-
-        except Exception as e:
-            Logger.error(
-                f"Error executing module {module_progress.value}: {e}",
-                context={"task": "_execute_module", "module": module_progress.value},
-            )
-            return False
-
-    def _monitor_r_execution(self, analysis_id: str, flag_path: str) -> str:
-        """Monitor R execution by polling flag file and return its content."""
-        print(f"Start monitoring R script execution - {analysis_id}")
-        max_wait_time = 7200  # 2 hours
-        check_interval = 3  # 3 seconds
-        elapsed_time = 0
-
-        Logger.debug(f"Checking flag file for {analysis_id} at {flag_path}")
-        print(f"DEBUG: Looking for flag file at {flag_path}")
-
-        while elapsed_time < max_wait_time:
-            try:
-                Logger.debug(f"Checking flag file for {analysis_id} at {flag_path}")
-                if os.path.exists(flag_path):
-                    with open(flag_path, "r") as f:
-                        flag_content = f.read().strip()
-                    Logger.info(f"Flag file found for {analysis_id}: {flag_content}")
-                    return flag_content
-                Logger.debug(f"Flag file not found for {analysis_id} at {flag_path}")
-                time.sleep(check_interval)
-                elapsed_time += check_interval
-            except Exception as e:
-                Logger.error(
-                    f"Error monitoring execution for {analysis_id}: {e}",
-                    context={"task": "_monitor_r_execution"},
-                )
-                return "error"
-
-        Logger.error(
-            f"Analysis {analysis_id} timed out after {max_wait_time} seconds",
-            context={"task": "_monitor_r_execution"},
-        )
-        return "error"
-
-    def _send_webhook(
-        self,
-        analysis_id: str,
-        flag_content: str,
-        webhook_url: str,
-        error_message: str = None,
-    ):
-        """Send webhook notification to update database."""
-        try:
-            payload = {
-                "analysis_id": analysis_id,
-                "status": flag_content,
-            }
-
-            print("payload: ", payload)
-            print("webhook_url: ", webhook_url)
-            response = requests.post(
-                webhook_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            Logger.info(
-                f"Webhook sent successfully for analysis {analysis_id}: {flag_content}"
-            )
-        except Exception as e:
-            Logger.error(
-                f"Failed to send webhook for analysis {analysis_id}: {e}",
-                context={"task": "_send_webhook"},
-            )
-
-    def _send_module_update_webhook(
-        self,
-        analysis_id: str,
-        payload: Dict[str, Any],
-        webhook_url: str,
-    ):
-        """Send webhook notification for module completion updates."""
-        try:
-            print("module update payload: ", payload)
-            print("webhook_url: ", webhook_url)
-            response = requests.post(
-                webhook_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            Logger.info(
-                f"Module update webhook sent successfully for analysis {analysis_id}: {payload['status']}"
-            )
-        except Exception as e:
-            Logger.error(
-                f"Failed to send module update webhook for analysis {analysis_id}: {e}",
-                context={"task": "_send_module_update_webhook"},
-            )
+    # Old thread-based execution methods removed - execution now handled in Docker containers
 
     async def save_analysis_parameters(
         self, request: SaveAnalysisParametersRequest
@@ -543,11 +286,7 @@ class AnalysisService:
                 ),
             }
 
-            # Create analysis directory if not exists
-            analysis_dir = f"/tmp/analysis/{request.analysis_id}"
-            os.makedirs(analysis_dir, exist_ok=True)
-
-            # Save parameters to JSON file
+            # Save parameters to JSON file using utils function
             parameters_file = get_parameters_file(request.analysis_id)
             os.makedirs(os.path.dirname(parameters_file), exist_ok=True)
             with open(parameters_file, "w") as f:

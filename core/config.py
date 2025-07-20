@@ -41,15 +41,17 @@ class Settings(BaseSettings):
     R_HOME: str = "/usr/lib/R"
     R_USER_LIB_DIR: str = "/usr/local/lib/R/site-library"
 
-    # Database Configuration
-    DATABASE_URL: str = "sqlite:///./smicrab.db"
-
     # PostgreSQL Configuration - reads strictly from .env
     POSTGRES_HOST: str
     POSTGRES_PORT: int
     POSTGRES_DB: str
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
+
+    # Database Configuration - constructed from PostgreSQL settings
+    @property
+    def DATABASE_URL(self) -> str:
+        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     # Validate that critical database configurations are set
     @field_validator(

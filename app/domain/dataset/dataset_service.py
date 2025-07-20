@@ -54,8 +54,8 @@ class DatasetService:
         )
 
     def get_csv_path(self, file_path: str, variable_name: str) -> str:
-        base_dir = os.path.dirname(file_path)
-        csv_dir = os.path.join(base_dir, "csv")
+        csv_dir = file_path.replace("/datasets/", "/datasets_csv/")
+        csv_dir = os.path.dirname(csv_dir)
         return os.path.join(csv_dir, f"{variable_name}.csv")
 
     def get_from_to_date(self, datasets: List[Raster]):

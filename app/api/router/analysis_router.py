@@ -19,6 +19,7 @@ from app.domain.analysis.analysis_dto import (
     AnalysisWebhookRequest,
     AnalysisWebhookResponse,
 )
+from app.Models.analysis import AnalyzeStatus
 from app.domain.analysis.analysis_service import AnalysisService
 from app.domain.response.response_dto import ResponseDTO
 from app.infrastructure.repositories.analysis_repository import AnalysisRepository
@@ -225,5 +226,82 @@ async def analysis_completion_webhook(
 
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        return APIResponse.send_error(message=str(e))
+
+
+@router.get("/running")
+async def get_running_analyses(
+    db: AsyncSession = Depends(get_db),
+):
+    """Get information about currently running analyses."""
+    try:
+        repo = AnalysisRepository(db)
+        service = AnalysisService(repo)
+        running_analyses = service.container_service.get_running_analyses()
+        
+        return APIResponse.send_response(
+            {"running_analyses": running_analyses, "count": len(running_analyses)},
+            message="running analyses retrieved successfully",
+            code=200,
+        )
+
+    except Exception as e:
+        return APIResponse.send_error(message=str(e))
+
+@router.get("/container/{analysis_id}/status")
+async def get_container_status(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get detailed container status for a specific analysis."""
+    try:
+        repo = AnalysisRepository(db)
+        service = AnalysisService(repo)
+        
+        # Verify analysis exists
+        await service.verify_analysis(analysis_id)
+        
+        # Get container status
+        container_status = service.container_service.get_container_status(analysis_id)
+        
+        return APIResponse.send_response(
+            container_status,
+            message="container status retrieved successfully",
+            code=200,
+        )
+
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        return APIResponse.send_error(message=str(e))
+
+
+@router.post("/stop/{analysis_id}")
+async def stop_analysis(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Stop a running analysis container."""
+    try:
+        repo = AnalysisRepository(db)
+        service = AnalysisService(repo)
+        
+        # Stop the container
+        stopped = service.container_service.stop_analysis_container(analysis_id)
+        
+        if stopped:
+            # Update analysis status in database
+            await service.update_analysis_status(analysis_id, AnalyzeStatus.error)
+            await repo.add_error_message(analysis_id, "Analysis manually stopped")
+            
+            return APIResponse.send_response(
+                {"analysis_id": analysis_id, "stopped": True},
+                message="analysis stopped successfully",
+                code=200,
+            )
+        else:
+            raise HTTPException(status_code=404, detail="Analysis container not found or already stopped")
+
     except Exception as e:
         return APIResponse.send_error(message=str(e))

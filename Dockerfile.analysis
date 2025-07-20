@@ -1,0 +1,25 @@
+# Use prebuilt image with all dependencies
+FROM smicrab-analysis-packages
+
+# Set working directory
+WORKDIR /app
+
+# Copy container runner script
+COPY app/utils/container_runner.py /app/container_runner.py
+RUN chmod +x /app/container_runner.py
+
+# Copy R scripts directory
+COPY r_scripts /app/r_scripts/
+
+# Copy the entire datasets folder into the image
+COPY datasets /app/datasets/
+
+# Create analysis output directory
+RUN mkdir -p /tmp/analysis
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Default command to run
+CMD ["python3", "/app/container_runner.py"]

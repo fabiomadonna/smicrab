@@ -22,8 +22,8 @@ xesmf==0.8.1
 gdown==5.2.0
 scipy==1.15.2
 
-# R integration
-rpy2==3.6.0
+# Container management
+docker==7.1.0
 
 # Database and caching (optional)
 redis==5.2.1

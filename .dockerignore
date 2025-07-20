@@ -40,8 +40,8 @@ logs/
 *.log
 
 # Project-specific
-datasets/
-r_scripts/
+# datasets/
+# r_scripts/
 
 # Database
 *.db

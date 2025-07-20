@@ -4,21 +4,22 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: smicrab_postgres
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: smicrab
-      POSTGRES_USER: smicrab_user
-      POSTGRES_PASSWORD: smicrab_password
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-#      - ./init_db:/docker-entrypoint-initdb.d/
     networks:
-      - smicrab_network
+      - smicrab-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U smicrab_user -d smicrab"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,50 +29,68 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: smicrab_backend
+    env_file:
+      - .env
     environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=smicrab
-      - POSTGRES_USER=smicrab_user
-      - POSTGRES_PASSWORD=smicrab_password
-      # Ensure DATABASE_URL is set and uses asyncpg, e.g.:
-      # - DATABASE_URL=postgresql+asyncpg://smicrab_user:smicrab_password@postgres:5432/smicrab
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      PROJECT_PATH: ${PROJECT_PATH}
+    
     ports:
       - "8000:8000"
     volumes:
       - ./:/app
-      - ./datasets:/app/datasets  # Mount datasets directory (read-write for CSV generation)
+      - ./datasets:/app/datasets
+      - ./datasets_csv:/app/datasets_csv
       - ./logs:/app/logs
       - ./r_scripts:/app/r_scripts
-      - ./.env:/app/.env  # Mount environment file if it exists
+      - ./.env:/app/.env
       - ./tmp/analysis:/tmp/analysis
-
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - smicrab_network
+      - smicrab-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 30s
-      start_period: 1200s  # Increased for R script processing and migrations
+      start_period: 1200s
       retries: 5
 
+  analysis:
+      image: smicrab-analysis:latest
+      profiles:
+        - "donotstart"
+      volumes:
+        - ./tmp/analysis:/tmp/analysis
+        - ./r_scripts:/app/r_scripts:ro
+        - ./datasets:/app/datasets:ro
+        - ./datasets_csv:/app/datasets_csv:ro
+      networks:
+        - smicrab-net
+    
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: smicrab_pgadmin
+    env_file:
+      - .env
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@smicrab.com
-      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
       - "8080:80"
     depends_on:
       - postgres
     networks:
-      - smicrab_network
+      - smicrab-net
     restart: unless-stopped
 
 volumes:
@@ -79,5 +98,6 @@ volumes:
     driver: local
 
 networks:
-  smicrab_network:
+  smicrab-net:
     driver: bridge
+    name: smicrab-net

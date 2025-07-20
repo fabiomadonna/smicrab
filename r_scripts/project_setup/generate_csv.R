@@ -42,7 +42,7 @@ tryCatch(
         
         log_info(paste("Found", length(netcdf_files), "NetCDF files"))
 
-        output_dir <- file.path("../../datasets", "csv")
+        output_dir <- "../../datasets_csv"
         log_info("Checking and generating CSV files...")
 
         # Track files that need generation
