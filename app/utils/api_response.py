@@ -8,7 +8,7 @@ from app.domain.response.response_dto import ResponseDTO
 class APIResponse:
 
     @staticmethod
-    def send_response(data, message: str = "", code: int = 200):
+    def send_response(data, message: str = "", code: int = 200, headers: dict = None):
         response = ResponseDTO(
             success=True,
             message=message,
@@ -18,12 +18,13 @@ class APIResponse:
         return JSONResponse(
             status_code=code,
             content=jsonable_encoder(response.model_dump()),
+            headers=headers,
         )
 
         # return JSONResponse(status_code=code, content=response.model_dump())
 
     @staticmethod
-    def send_error(message: str = "Something went wrong", code: int = 400):
+    def send_error(message: str = "Something went wrong", code: int = 400, headers: dict = None):
         response = ResponseDTO(
             success=False,
             data=None,
@@ -32,6 +33,7 @@ class APIResponse:
         return JSONResponse(
             status_code=code,
             content=jsonable_encoder(response.model_dump()),
+            headers=headers,
         )
 
     @staticmethod

@@ -26,8 +26,13 @@ class Dataset(Base):
     dimensions = Column(JSONB)
     data_vars = Column(JSONB)
     time_coords = Column(JSONB)
-    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-    updated_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     __table_args__ = (
         Index("idx_datasets_variable_name", "variable_name"),

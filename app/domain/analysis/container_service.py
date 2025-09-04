@@ -3,7 +3,7 @@ import os
 import threading
 import time
 from typing import Dict, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.utils.logger import Logger
 from core.config import settings
 
@@ -108,7 +108,7 @@ class ContainerService:
                     "analysis_id": analysis_id,
                     "model_type": model_type,
                     "container_name": container_name,
-                    "started_at": datetime.now(),
+                    "started_at": datetime.now(timezone.utc),
                     "container": container
                 }
             

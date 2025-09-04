@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from app.Models.analysis import Analysis, AnalyzeStatus
 from app.utils.enums import ModuleName, ModelType
 from typing import List, Dict, Any
@@ -24,6 +24,17 @@ class AnalysisRepository:
         await self.db.commit()
         await self.db.refresh(analysis)
         return analysis
+
+    async def delete_analysis(self, analysis_id: str) -> bool:
+        """Delete an analysis from the database."""
+        try:
+            stmt = delete(Analysis).where(Analysis.id == analysis_id)
+            result = await self.db.execute(stmt)
+            await self.db.commit()
+            return result.rowcount > 0
+        except Exception as e:
+            await self.db.rollback()
+            raise e
 
     async def update_current_module(
         self,
@@ -71,7 +82,7 @@ class AnalysisRepository:
     ) -> Analysis:
         """Update the status of an analysis."""
         await self.db.execute(
-            update(Analysis).where(Analysis.id == analysis_id).values(status=status, updated_at=datetime.now())
+            update(Analysis).where(Analysis.id == analysis_id).values(status=status)
         )
         await self.db.commit()
         return await self.get_by_id(analysis_id)

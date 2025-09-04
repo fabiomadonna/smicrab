@@ -148,3 +148,24 @@ class UserAnalysesResponse(BaseModel):
             datetime: lambda dt: dt.isoformat(),
             UUID: lambda uuid: str(uuid),
         }
+
+
+class DeleteAnalysisRequest(BaseModel):
+    """Request schema for deleting an analysis."""
+    
+    analysis_id: str = Field(..., description="Analysis ID to delete")
+    
+    class Config:
+        from_attributes = True
+
+
+class DeleteAnalysisResponse(BaseModel):
+    """Response schema for deleting an analysis."""
+    
+    analysis_id: str = Field(..., description="Deleted analysis ID")
+    deleted: bool = Field(..., description="Whether the analysis was successfully deleted")
+    container_stopped: bool = Field(False, description="Whether a running container was stopped")
+    message: str = Field(..., description="Deletion status message")
+    
+    class Config:
+        from_attributes = True

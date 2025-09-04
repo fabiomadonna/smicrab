@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.response.response_dto import ResponseDTO
 from app.utils.api_response import APIResponse
 from app.utils.db import get_db
+from app.utils.auth import get_current_active_user
+from app.Models.user import User
 from app.domain.validate.validate_dto import (
     GetValidateOutputsResponse,
 )
@@ -20,13 +22,17 @@ router = APIRouter()
 
 @router.get("/outputs", response_model=ResponseDTO[GetValidateOutputsResponse])
 async def get_validate_outputs(
-    analysis_id: str, db: AsyncSession = Depends(get_db)
+    analysis_id: str, 
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """Get validate module outputs for the given analysis and model type."""
     try:
         analysis_repo = AnalysisRepository(db)
         analysis_service = AnalysisService(analysis_repo)
-        analysis = await analysis_service.verify_analysis(analysis_id)
+        
+        # Verify analysis ownership
+        analysis = await analysis_service.verify_analysis_ownership(analysis_id, str(current_user.user_id))
 
         # Initialize service
         service = ValidateModuleService()
@@ -47,9 +53,16 @@ async def get_validate_outputs(
 async def download_validate_file(
     analysis_id: str,
     file_name: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Download validate module result files."""
     try:
+        # Verify analysis ownership
+        analysis_repo = AnalysisRepository(db)
+        analysis_service = AnalysisService(analysis_repo)
+        await analysis_service.verify_analysis_ownership(analysis_id, str(current_user.user_id))
+        
         # Construct file path
         file_path = get_analysis_path(analysis_id)
         

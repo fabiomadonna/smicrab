@@ -32,8 +32,13 @@ class Analysis(Base):
 
     error_message = Column(Text)
     expires_at = Column(TIMESTAMP)
-    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-    updated_at = Column(TIMESTAMP, server_default=func.current_timestamp())
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     __table_args__ = (
         Index("idx_analysis_user_id", "user_id"),

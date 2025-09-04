@@ -219,6 +219,8 @@ PROJECT_PATH=/path/to/your/smicrab-backend
 # Analysis Resource Limits
 MEMORY_LIMIT_PER_ANALYSIS=4g
 CPU_LIMIT_PER_ANALYSIS=2.0
+
+JWT_SECRET_KEY=824e04652690573705daf505516be7a5bc7193148b9240cc33f7857d01c65661
 ```
 
 **Important**: Replace `/path/to/your/smicrab-backend` in `PROJECT_PATH` with the actual absolute path to your project root directory. For example:
@@ -347,6 +349,7 @@ WEBHOOK_URL=http://smicrab_backend:8000/api/v1/analysis/webhook/completion
 PROJECT_PATH=/home/mahan/codes/Italy/smicrab-backend
 MEMORY_LIMIT_PER_ANALYSIS=4g
 CPU_LIMIT_PER_ANALYSIS=2.0
+JWT_SECRET_KEY=824e04652690573705daf505516be7a5bc7193148b9240cc33f7857d01c65661
 ```
 
 ---

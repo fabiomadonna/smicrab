@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 import os
 import shutil
@@ -60,7 +60,7 @@ class DatasetService:
 
     def get_from_to_date(self, datasets: List[Raster]):
         if len(datasets) == 0:
-            return datetime.now(), datetime.now()
+            return datetime.now(timezone.utc), datetime.now(timezone.utc)
         all_from_dates = [dataset.from_date for dataset in datasets]
         all_to_dates = [dataset.to_date for dataset in datasets]
         return min(all_from_dates), max(all_to_dates)

@@ -8,6 +8,8 @@ from app.domain.analysis.analysis_dto import (
     RunAnalysisResponse,
     AnalysisWebhookRequest,
     AnalysisWebhookResponse,
+    DeleteAnalysisRequest,
+    DeleteAnalysisResponse,
 )
 from app.domain.integration.analysis_integration_service import (
     AnalysisIntegrationService,
@@ -30,7 +32,7 @@ from app.utils.enums import (
     ModuleProgress,
 )
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List
 import os
 import json
@@ -57,6 +59,24 @@ class AnalysisService:
                 context={"task": "handle_verify_analysis", "message": str(e)},
             )
             raise Exception("Failed to verify Analysis")
+
+    async def verify_analysis_ownership(self, analysis_id: str, user_id: str) -> Analysis:
+        """Verify that the analysis exists and belongs to the specified user."""
+        try:
+            analysis = await self.repository.get_by_id(analysis_id)
+            if analysis is None:
+                raise ValueError(f'Analysis "{analysis_id}" does not exist')
+            
+            if str(analysis.user_id) != user_id:
+                raise ValueError(f'Analysis "{analysis_id}" does not belong to user "{user_id}"')
+            
+            return analysis
+        except Exception as e:
+            Logger.error(
+                "Failed to verify analysis ownership: {}".format(e),
+                context={"task": "verify_analysis_ownership", "analysis_id": analysis_id, "user_id": user_id},
+            )
+            raise e
 
     async def create_analysis(self, request: CreateAnalysisRequest) -> AnalysisSchema:
         try:
@@ -303,7 +323,7 @@ class AnalysisService:
                 },
                 is_dynamic_output=request.bool_dynamic,
                 analysis_date=(
-                    datetime.now()
+                    datetime.now(timezone.utc)
                     if request.user_date_choice is None
                     else datetime.fromisoformat(request.user_date_choice)
                 ),
@@ -510,5 +530,96 @@ class AnalysisService:
                     "file_type": file_type,
                     "file_name": file_name,
                 },
+            )
+            raise e
+
+    async def delete_analysis(self, request: DeleteAnalysisRequest) -> DeleteAnalysisResponse:
+        """
+        Delete an analysis and clean up associated resources.
+        
+        Args:
+            request (DeleteAnalysisRequest): Analysis deletion request
+            
+        Returns:
+            DeleteAnalysisResponse: Deletion status and details
+        """
+        try:
+            # Verify analysis exists
+            analysis = await self.verify_analysis(request.analysis_id)
+            
+            container_stopped = False
+            
+            # Check if analysis is running and stop container if needed
+            if analysis.status == AnalyzeStatus.in_progress:
+                Logger.info(f"Stopping running container for analysis {request.analysis_id}")
+                container_stopped = self.container_service.stop_analysis_container(request.analysis_id)
+                if container_stopped:
+                    Logger.info(f"Successfully stopped container for analysis {request.analysis_id}")
+                else:
+                    Logger.warn(f"Could not stop container for analysis {request.analysis_id}")
+            
+            # Delete analysis from database
+            deleted = await self.repository.delete_analysis(request.analysis_id)
+            
+            if not deleted:
+                raise ValueError(f"Failed to delete analysis {request.analysis_id} from database")
+            
+            # Clean up analysis files
+            try:
+                self._cleanup_analysis_files(request.analysis_id)
+            except Exception as cleanup_error:
+                Logger.warn(
+                    f"Failed to cleanup analysis files for {request.analysis_id}: {cleanup_error}",
+                    context={"task": "delete_analysis", "analysis_id": request.analysis_id}
+                )
+            
+            Logger.info(f"Successfully deleted analysis {request.analysis_id}")
+            
+            return DeleteAnalysisResponse(
+                analysis_id=request.analysis_id,
+                deleted=True,
+                container_stopped=container_stopped,
+                message=f"Analysis {request.analysis_id} deleted successfully"
+            )
+            
+        except Exception as e:
+            Logger.error(
+                f"Failed to delete analysis {request.analysis_id}: {e}",
+                context={"task": "delete_analysis", "analysis_id": request.analysis_id}
+            )
+            raise e
+
+    def _cleanup_analysis_files(self, analysis_id: str):
+        """
+        Clean up analysis files from the filesystem.
+        
+        Args:
+            analysis_id (str): Analysis ID to cleanup
+        """
+        try:
+            # Get analysis output directory
+            output_base_dir = (
+                "/tmp/analysis"
+                if os.name != "nt"
+                else os.path.join(os.getcwd(), "tmp", "analysis")
+            )
+            
+            analysis_dir = os.path.join(output_base_dir, analysis_id)
+            
+            if os.path.exists(analysis_dir):
+                import shutil
+                shutil.rmtree(analysis_dir)
+                Logger.info(f"Cleaned up analysis directory: {analysis_dir}")
+            
+            # Also cleanup parameters file
+            parameters_file = get_parameters_file(analysis_id)
+            if os.path.exists(parameters_file):
+                os.remove(parameters_file)
+                Logger.info(f"Cleaned up parameters file: {parameters_file}")
+                
+        except Exception as e:
+            Logger.error(
+                f"Error cleaning up analysis files for {analysis_id}: {e}",
+                context={"task": "_cleanup_analysis_files", "analysis_id": analysis_id}
             )
             raise e

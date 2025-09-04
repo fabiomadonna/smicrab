@@ -17,6 +17,7 @@ from app.api.api import api_router
 from core.config import settings
 from core.logging_config import setup_logging
 from app.domain.analysis.container_service import ContainerService
+from app.middleware.auth_middleware import AuthMiddleware, RateLimitMiddleware
 
 # Load environment variables from .env file
 load_dotenv()
@@ -72,6 +73,12 @@ app = FastAPI(
 
 # Add middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Add authentication middleware
+app.add_middleware(AuthMiddleware)
+
+# Add rate limiting middleware
+app.add_middleware(RateLimitMiddleware, requests_per_minute=60)
 
 # Configure CORS (Cross-Origin Resource Sharing)
 app.add_middleware(
