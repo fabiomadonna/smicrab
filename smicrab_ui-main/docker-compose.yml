@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  smicrab-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DOWNLOAD_URL: ${DOWNLOAD_URL}
+    container_name: smicrab-ui
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - DOWNLOAD_URL=${DOWNLOAD_URL}
+      - API_URL=${API_URL}
+    networks:
+      - smicrab-ui
+    restart: unless-stopped
+
+networks:
+  smicrab-ui:
+    # external: true
+    name: smicrab-ui
