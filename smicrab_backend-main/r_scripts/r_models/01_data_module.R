@@ -12,7 +12,7 @@ tryCatch(
     # ==============================================================================
     # DATAFRAME CREATION
     # ==============================================================================
-
+    
     log_info("Load or updating dataframes...")
     if (!bool_update) {
       if (file.exists(rdata_path)) {
@@ -23,7 +23,7 @@ tryCatch(
         bool_update <- TRUE
       }
     }
-
+    
     if (bool_update) {
       log_info("Creating new dataframes...")
       dataframes <- variable
@@ -38,16 +38,16 @@ tryCatch(
       log_info("Saving dataframes to {rdata_path}")
       save(dataframes, file = rdata_path)
     }
-
-
-
+    
+    
+    
     log_info("Saving the endogenous variable as csv")
     fun.download.csv(rry, name_file = name.endogenous, output_dir = file.path(output_dir, "data"))
-
+    
     # ==============================================================================
     # EXPORT RESULTS
     # ==============================================================================
-
+    
     # Save workspace for other modules
     workspace_path <- file.path(output_dir, "Rdata", "data_module_workspace.RData")
     save(
@@ -56,12 +56,12 @@ tryCatch(
       ),
       file = workspace_path
     )
-
+    
     log_info("Data module completed. Workspace saved to: {workspace_path}")
     log_info("Available variables: {paste(names(variable), collapse = ', ')}")
     log_info("Selected endogenous variable: {name.endogenous}")
     log_info("Selected covariates: {paste(name.covariates, collapse = ', ')}")
-
+    
     # Optional: Export all variables to CSV if requested
     if (exists("export_all_csv") && export_all_csv) {
       log_info("Exporting all variables to CSV...")
@@ -69,7 +69,7 @@ tryCatch(
         fun.download.csv(variable[[var_name]], name_file = var_name, output_dir = file.path(output_dir, "data"))
       })
     }
-
+    
     log_info("DATA MODULE COMPLETED")
   },
   error = function(e) {
