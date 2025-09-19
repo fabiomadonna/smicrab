@@ -1,4 +1,4 @@
-build.sdpd.series <- function(px="all", rry, rrXX=NULL, rrgroups=NULL, label_groups=NULL, dummy=NULL, latit=NULL, longit=NULL, n.px=NULL, 
+build.sdpd.series <- function(px="all", rry, rrXX=NULL, rrgroups=NULL, var_boolean=NULL, label_groups=NULL, dummy=NULL, latit=NULL, longit=NULL, n.px=NULL, 
                     vec.options=list(groups=0, px.core=0, px.neighbors=0, t_frequency=1, na.rm=T, NAcovs="pairwise.complete.obs"), 
                     titolo=NULL, type.w=c("distanze", "correlazioni")[1]){
   ### estrazione e organizzazione dei dati input, con identificazione dei valori mancanti
@@ -76,7 +76,7 @@ build.sdpd.series <- function(px="all", rry, rrXX=NULL, rrgroups=NULL, label_gro
     n.reg <- 0
     varX <- character(kk)
     XX <- array(0, dim=c(kk, pp, tt))
-    for(rr in 1:kk){
+    for(rr in 1:dim(XX)[1]){
       if(!is.null(rrXX[[rr]])){
         n.reg <- n.reg+1
         if(is.character(rrXX[[rr]])){
@@ -84,6 +84,16 @@ build.sdpd.series <- function(px="all", rry, rrXX=NULL, rrgroups=NULL, label_gro
             XX[n.reg,,] <- matrix(rep(seq(1, tt)/tt, pp), byrow=TRUE, nrow=pp)
             varX[n.reg] <- "trend"
           }
+          else if(rrXX[[rr]]=="semester"){
+            semestre <- ifelse(substr(as.character(tempo), start=6, stop=7) %in% c("06", "07", "08"), 1, 0)
+            XX[n.reg,,] <- matrix(rep(semestre, pp), byrow=TRUE, nrow=pp)
+            varX[n.reg] <- "semester"
+          }
+          else if(rrXX[[rr]]=="boolean" & (!is.null(var_boolean))){
+            XX[n.reg,,] <- matrix(rep(var_boolean[as.character(indici)], pp), byrow=TRUE, nrow=pp)
+            varX[n.reg] <- "boolean"
+          }
+          else n.reg <- n.reg-1
         }
         else{
           varX[n.reg] <- names(rrXX)[rr]
@@ -396,15 +406,22 @@ check.sdpd.series <- function(series, WW=NULL, XX=NULL, coordinates=NULL, model=
 	  XX <- XX[model$beta.coeffs,,]
 	  model$beta.coeffs <- model$beta.coeffs[model$beta.coeffs]
 	}
-	else names(model$beta.coeffs) <- "varX1"
+	else if(kk==1 & is.array(XX)){
+	  XX <- XX[model$beta.coeffs,,]
+	  model$beta.coeffs <- model$beta.coeffs[model$beta.coeffs]
+	}
+	else if(is.null(names(model$beta.coeffs)))
+	  names(model$beta.coeffs) <- "varX1"
 	
 	if(is.null(model$fixed_effects) | !is.logical(model$fixed_effects)){
 	  model$fixed_effects <- FALSE
 	  n.warning <- n.warning+1
 	  vec.warning[n.warning] <- "The model has not the fixed effects...please check if this is OK."
 	}
-	if(model$fixed_effects)
+	if(model$fixed_effects){
 	  mu <- apply(dseries, 1, mean)
+	  #dseries <- t(apply(dseries, 1, FUN=function(x){x-mean(x)}))	  
+	}
 	else mu <- numeric(pp)
 	
 	if(is.null(model$time_effects)| !is.logical(model$time_effects))
@@ -579,8 +596,8 @@ plot.sdpd.series <- function(serie.obj, ts.units=as.character(serie.obj$p.axis$p
 
 
 
-fit.sdpd.model <- function(series, W=NULL, X=NULL, coordinates=NULL, model=list(lambda.coeffs=c(T,T,T), beta.coeffs=NULL, fixed_effects=T, time_effects=F),
-                           data.back=TRUE, vec.options=list(two.stage=FALSE, NAcovs="pairwise.complete.obs")) 
+fit.sdpd.model <- function(series, W=NULL, X=NULL, coordinates=NULL, model=list(lambda.coeffs=c(T,T,T), beta.coeffs=NULL, fixed_effects=T, time_effects=T),
+                           data.back=TRUE, mu.analysis=TRUE, vec.options=list(two.stage=FALSE, NAcovs="pairwise.complete.obs")) 
 {
   ## dseries is a matrix of dimension (nn,pp) where pp is the number of univariate time dseries and data$nn the number of time observations
   ## W is a spatial weight matrix of dimension (pp,pp)
@@ -599,14 +616,24 @@ fit.sdpd.model <- function(series, W=NULL, X=NULL, coordinates=NULL, model=list(
   fit <- fit.sdpd.coefficients(W=data$WW, COVs=COVs, mu=data$mu, model=data$model)
 
   ## estimating fitted values...
-  res <- fit.sdpd.series(dseries=data$series, W=data$WW, X.centr=data$X, model=data$model, lambda.hat=fit$coeff.hat, time_effects=data$time_effects)
+  res <- fit.sdpd.series(dseries=data$series, W=data$WW, X.centr=data$X, model=data$model, coeff.hat=fit$coeff.hat, time_effects=data$time_effects)
   
   ## returning estimation results
+  if(mu.analysis){
+    mu.i <- apply(res$fitted, 1, mean, na.rm=T)
+    mu.around <- as.vector(data$WW%*%mu.i)
+    names(mu.around) <- names(mu.i)
+    intercept_norm <- fit$coeff.hat[,"fixed_effects"]/((1-fit$coeff.hat[,"lambda1"])*mu.around)
+    slope_norm <- (fit$coeff.hat[,"lambda0"]+fit$coeff.hat[,"lambda1"]+fit$coeff.hat[,"lambda2"]-1)/(1-fit$coeff.hat[,"lambda1"])
+    abs_diff <- (intercept_norm+slope_norm)*mu.around
+    norm_diff <- (intercept_norm+slope_norm)
+    fit$coeff.hat <- cbind(fit$coeff.hat, intercept_norm=intercept_norm, slope_norm=slope_norm, abs_diff=abs_diff, norm_diff=norm_diff)
+  }
   if(data.back)
     data.back <- list(series=data$series, W=data$WW, X=data$XX, intorno=data$intorno)
   else
     data.back <- NULL
-  list(coeff.hat=fit$coeff.hat, fitted=res$fitted, resid=res$resid, time_effects=data$time_effects, data=data.back, model=data$model, errors=data$errors, warnings=data$warning)
+  list(coeff.hat=fit$coeff.hat, fitted=res$fitted, resid=res$resid, mu.i=mu.i, mu.around=mu.around, time_effects=data$time_effects, data=data.back, model=data$model, errors=data$errors, warnings=data$warning)
 }
 
 
@@ -648,9 +675,9 @@ fit.sdpd.coefficients <- function (W, COVs, mu, model)
   data <- list(WW=W, pp=length(px), kk=length(beta.names))
   
   ## variable definition...
-  lambda.hat	<- matrix(0, nrow=data$pp, ncol=sum(model$fixed_effects)+sum(model$lambda.coeffs)+sum(model$beta.coeffs))
-  dimnames(lambda.hat)[[2]] <- c(lambda.names, beta.names, fixed_effects.name)
-  dimnames(lambda.hat)[[1]] <- px
+  coeff.hat	<- matrix(0, nrow=data$pp, ncol=sum(model$fixed_effects)+sum(model$lambda.coeffs)+sum(model$beta.coeffs))
+  dimnames(coeff.hat)[[2]] <- c(lambda.names, beta.names, fixed_effects.name)
+  dimnames(coeff.hat)[[1]] <- px
   ei <- numeric(data$pp); names(ei) <- px
   ## estimation of coefficients...
   invertible <- function(m) class(try(solve(m),silent=T))[1]=="matrix"
@@ -663,10 +690,10 @@ fit.sdpd.coefficients <- function (W, COVs, mu, model)
       Yi <- t(COVs$cov12[,indici])%*%ei
       Xi <- cbind(t(COVs$cov12[,indici])%*%wi, t(COVs$cov11[,indici])%*%ei, t(COVs$cov11[,indici])%*%wi)[,model$lambda.coeffs]
       if(!invertible(t(Xi)%*%Xi)){
-        lambda.hat[ii,1:num.coeff] <- NA
+        coeff.hat[ii,1:num.coeff] <- NA
         next
       }
-      lambda.hat[ii,1:num.coeff] <- solve(t(Xi)%*%Xi)%*%t(Xi)%*%Yi
+      coeff.hat[ii,1:num.coeff] <- solve(t(Xi)%*%Xi)%*%t(Xi)%*%Yi
     }
   }
   else if(data$kk==1){
@@ -678,10 +705,10 @@ fit.sdpd.coefficients <- function (W, COVs, mu, model)
       Yi <- t(COVs$cov12[,indici])%*%ei
       Xi <- cbind(t(COVs$cov12[,indici])%*%wi, t(COVs$cov11[,indici])%*%ei, t(COVs$cov11[,indici])%*%wi, t(COVs$covX[,indici])%*%ei)[,c(model$lambda.coeffs,T)]
       if(!invertible(t(Xi)%*%Xi)){
-        lambda.hat[ii,1:num.coeff] <- NA
+        coeff.hat[ii,1:num.coeff] <- NA
         next
       }
-      lambda.hat[ii,1:num.coeff] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%Yi)
+      coeff.hat[ii,1:num.coeff] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%Yi)
     }
   }
   else if(data$kk>1){
@@ -694,28 +721,29 @@ fit.sdpd.coefficients <- function (W, COVs, mu, model)
       Xi <- cbind(t(COVs$cov12[,indici])%*%wi, t(COVs$cov11[,indici])%*%ei, t(COVs$cov11[,indici])%*%wi)[,model$lambda.coeffs]
       Xi <- cbind(Xi, t(COVs$covX[beta.names,ii,indici]))
       if(!invertible(t(Xi)%*%Xi)){
-        lambda.hat[ii,1:num.coeff] <- NA
+        coeff.hat[ii,1:num.coeff] <- NA
         next
       }
-      lambda.hat[ii,1:num.coeff] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%Yi)
+      coeff.hat[ii,1:num.coeff] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%Yi)
     }
   }
   if(model$fixed_effects){
-    ll0 <- ll1 <- ll2 <- matrix(0, ncol=data$pp, nrow=data$pp)
-    if(model$lambda.coeffs[1]) ll0 <- diag(lambda.hat[,"lambda0"])%*%W
-    if(model$lambda.coeffs[2]) ll1 <- diag(lambda.hat[,"lambda1"])
-    if(model$lambda.coeffs[3]) ll2 <- diag(lambda.hat[,"lambda2"])%*%W
+    ll0 <- ll1 <- ll2 <- llv <- matrix(0, ncol=data$pp, nrow=data$pp)
+    if(model$lambda.coeffs[1]) ll0 <- diag(coeff.hat[,"lambda0"])%*%W
+    if(model$lambda.coeffs[2]) ll1 <- diag(coeff.hat[,"lambda1"])
+    if(model$lambda.coeffs[3]) ll2 <- diag(coeff.hat[,"lambda2"])%*%W
     B <- diag(rep(1, data$pp))-ll0-ll1-ll2
-    lambda.hat[,"fixed_effects"] <- B%*%mu
+    coeff.hat[,"fixed_effects"] <- B%*%mu
   }
   
   ## estimation results...
-  list(coeff.hat=lambda.hat)
+  list(coeff.hat=coeff.hat)
 }
 
 
 
-fit.sdpd.series <- function(dseries, W, X.centr=NULL, model, lambda.hat, time_effects=NULL, resid=FALSE) 
+fit.sdpd.series <- function(dseries, W, X.centr=NULL, model, coeff.hat, time_effects=NULL, 
+                            two.stage=FALSE, resids=NULL, markovian=TRUE) 
 {
   beta.names <- names(model$beta.coeffs)[model$beta.coeffs]
   px <- dimnames(dseries)[[1]]
@@ -725,36 +753,79 @@ fit.sdpd.series <- function(dseries, W, X.centr=NULL, model, lambda.hat, time_ef
   ## variable definition...
   ll0 <- ll1 <- ll2 <- matrix(0, nrow=data$pp, ncol=data$pp)
   Id <- diag(rep(1, data$pp))
+  if(model$lambda.coeffs["lambda0"]) ll0 <- diag(coeff.hat[,"lambda0"])
+  if(model$lambda.coeffs["lambda1"]) ll1 <- diag(coeff.hat[,"lambda1"])
+  if(model$lambda.coeffs["lambda2"]) ll2 <- diag(coeff.hat[,"lambda2"])
+  if(two.stage & sum(model$beta.coeffs)>0 & data$kk>0){
+    YY2	<- dseries[,2:data$nn] - ll0%*%W%*%dseries[,2:data$nn] - ll1%*%dseries[,1:(data$nn-1)] - ll2%*%W%*%dseries[,1:(data$nn-1)]
+    if(model$fixed_effects){
+      if(data$kk>1){
+        for(ii in 1:data$pp){
+          Xi <- cbind(t(X.centr[beta.names,ii,-1]), rep(1, data$nn-1))
+          coeff.hat[ii,c(beta.names, "fixed_effects")] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%(YY2[ii,]))
+        }
+      }
+      else{ 
+        for(ii in 1:data$pp){
+          Xi <- cbind(t(X.centr[ii,-1]), rep(1, data$nn-1))
+          coeff.hat[ii,c(beta.names, "fixed_effects")] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%(YY2[ii,]))
+        }
+      }
+    }
+    else if(data$kk>1){
+      for(ii in 1:data$pp){
+        Xi <- t(X.centr[beta.names,ii,-1])
+        coeff.hat[ii,beta.names] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%(YY2[ii,]))
+      }
+    }
+    else if(data$kk==1){
+      for(ii in 1:data$pp){
+        Xi <- t(X.centr[ii,-1])
+        coeff.hat[ii,beta.names] <- (solve(t(Xi)%*%Xi)%*%t(Xi)%*%(YY2[ii,]))
+      }
+    }
+  }
   llk <- llc <- matrix(0, nrow=data$pp, ncol=data$nn)
-  if(model$lambda.coeffs["lambda0"]) ll0 <- diag(lambda.hat[,"lambda0"])
-  if(model$lambda.coeffs["lambda1"]) ll1 <- diag(lambda.hat[,"lambda1"])
-  if(model$lambda.coeffs["lambda2"]) ll2 <- diag(lambda.hat[,"lambda2"])
   if(is.null(model$time_effects) | !model$time_effects | is.null(time_effects))
     time_effects <- numeric(data$nn)
   llv <- matrix(rep(time_effects, data$pp), byrow = TRUE, nrow=data$pp)
   if(model$fixed_effects){
-    llc <- lambda.hat[,"fixed_effects"]%*%t(rep(1, data$nn))
+    llc <- coeff.hat[,"fixed_effects"]%*%t(rep(1, data$nn))
   }
   if(data$kk==1){
-    llk <- diag(lambda.hat[,beta.names[1]])%*%X.centr
+    llk <- diag(coeff.hat[,beta.names[1]])%*%X.centr
   }
   else if(data$kk>1){
     for(jj in 1:data$kk) 
-      llk <- llk + diag(lambda.hat[,beta.names[jj]])%*%X.centr[jj,,]
+      llk <- llk + diag(coeff.hat[,beta.names[jj]])%*%X.centr[jj,,]
   }
   
   ## estimation results...
-  if(resid){
+  if(!is.null(resids) & markovian){
     tempI  <- solve(Id-ll0%*%W)
     AA		<- tempI%*%(ll1 + ll2%*%W)
-    eps.star1 	<- tempI%*%(llk + llc + dseries)
+    eps.star1 	<- tempI%*%(llk + llc + resids)
     for(tt in 2:data$nn)
       dseries[,tt] <- AA%*%(dseries)[,tt-1]+ eps.star1[,tt]
+    fitted <- ll0%*%W%*%dseries[,2:data$nn]+(ll1+ll2%*%W)%*%dseries[,-data$nn]+llk[,-1]+llc[,-1]+llv[,-1]
+    fitted <- cbind(dseries[,1], fitted)
+    resid	<- resids
   }
-  fitted <- ll0%*%W%*%dseries[,2:data$nn]+(ll1+ll2%*%W)%*%dseries[,-data$nn]+llk[,-1]+llc[,-1]+llv[,-1]
-  fitted <- cbind(rep(NA, data$pp), fitted)
-  resid	<- dseries - fitted
-
+  else if(!is.null(resids)){
+    tempI  <- solve(Id-ll0%*%W)
+    AA		<- tempI%*%(ll1 + ll2%*%W)
+    eps.star1 	<- tempI%*%(llk + llc + resids)
+    dseries[,-1] <- AA%*%(dseries)[,-data$nn]+ eps.star1[,-1]
+    fitted <- ll0%*%W%*%dseries[,2:data$nn]+(ll1+ll2%*%W)%*%dseries[,-data$nn]+llk[,-1]+llc[,-1]+llv[,-1]
+    fitted <- cbind(dseries[,1], fitted)
+    resid	<- resids
+  }
+  else{
+    fitted <- ll0%*%W%*%dseries[,2:data$nn]+(ll1+ll2%*%W)%*%dseries[,-data$nn]+llk[,-1]+llc[,-1]+llv[,-1]
+    fitted <- cbind(rep(NA, data$pp), fitted)
+    resid	<- dseries - fitted
+  }
+  
   dimnames(resid)[[1]] <- dimnames(fitted)[[1]] <- px
   dimnames(resid)[[2]] <- dimnames(fitted)[[2]] <- time
   
@@ -961,23 +1032,23 @@ bootstrap.sdpd.model <- function(n.boot=399, boot.plot=TRUE){
     diag(ll0) <- diag(ll1) <- diag(ll2) <- 0
     mu <- numeric(pp)
     llk <- llc <- matrix(0, nrow=pp, ncol=nn)
-    if(res.fit$model$lambda.coeffs["lambda0"]) ll0 <- diag(lambda.hat[,"lambda0"])
-    if(res.fit$model$lambda.coeffs["lambda1"]) ll1 <- diag(lambda.hat[,"lambda1"])
-    if(res.fit$model$lambda.coeffs["lambda2"]) ll2 <- diag(lambda.hat[,"lambda2"])
+    if(res.fit$model$lambda.coeffs["lambda0"]) ll0 <- diag(coeff.hat[,"lambda0"])
+    if(res.fit$model$lambda.coeffs["lambda1"]) ll1 <- diag(coeff.hat[,"lambda1"])
+    if(res.fit$model$lambda.coeffs["lambda2"]) ll2 <- diag(coeff.hat[,"lambda2"])
     if(res.fit$model$fixed_effects){
-      llc <- lambda.hat[,"fixed_effects"]%*%t(rep(1, nn))
+      llc <- coeff.hat[,"fixed_effects"]%*%t(rep(1, nn))
       mu <- apply(dserie, 1, mean)
     }
     if(kk>0){
       if(is.matrix(res.fit$data$X))
-        llk <- diag(lambda.hat[,beta.names[1]])%*%res.fit$data$X
+        llk <- diag(coeff.hat[,beta.names[1]])%*%res.fit$data$X
       else if(is.array(res.fit$data$X)){
         for(rr in beta.names)
-          llk <- llk + diag(lambda.hat[,rr])%*%res.fit$data$X[rr,,]
+          llk <- llk + diag(coeff.hat[,rr])%*%res.fit$data$X[rr,,]
       }
       else return(error="Something wrong with the X data matrix")
     } 
-    boot.rep	<- array(0, dim=c(n.boot, pp, dim(lambda.hat)[2]))	
+    boot.rep	<- array(0, dim=c(n.boot, pp, dim(coeff.hat)[2]))	
     devs.tsboot <- matrix(0, nrow=n.boot, ncol=pp)
     boot.ind 	<- matrix(sample(i.resid, size=(nn)*n.boot, replace = TRUE), nrow=n.boot)
     tempI  <- solve(Id-ll0%*%res.fit$data$W)
@@ -1013,15 +1084,14 @@ bootstrap.sdpd.model <- function(n.boot=399, boot.plot=TRUE){
   boot.rep
 }
 
-
-
-check.sdpd.model <- function(res.fit, correzione=TRUE){
+check.sdpd.model <- function(res.fit, correction, indici=NULL){
   
   pp <- dim(res.fit$data$series)[1]
   nn <- dim(res.fit$data$series)[2]
   kk <- sum(res.fit$model$beta.coeffs)
   mu <- apply(res.fit$data$series, 1, mean)
   ll0 <- ll1 <- ll2 <- matrix(0, ncol=pp, nrow=pp)
+  indici.correction <- numeric(pp)
   
   ## calcoliamo autovalori delle componenti della matrice ridotta A
   coeff.hat <- res.fit$coeff.hat
@@ -1038,99 +1108,106 @@ check.sdpd.model <- function(res.fit, correzione=TRUE){
     ll2 <- diag(coeff.hat[,"lambda2"])%*%res.fit$data$W
   matrice2 <- ll1+ll2
   vettore2 <- eigen(matrice2)$values
+  eigenA <- eigenA.post <- eigen(matrice1%*%matrice2)$values
   
-  eigenA <- eigen(matrice1%*%matrice2)$values
-  diagnostics <- cbind(vettore1, vettore2, Mod(eigenA))
-
-  ## correzione dei coefficienti stimati, per migliorare la stazionarietà del processo stimato
-  indici.correzione <- Mod(eigenA)>1
-  if(sum(indici.correzione)>0){
-    if("lambda1"%in%dimnames(res.fit$coeff.hat)[[2]]){
-      indici.correzione <- res.fit$coeff.hat[,"lambda1"]>1
-      if(sum(indici.correzione)>0){
-        coeff.hat[indici.correzione,"lambda1"] <- 0
-        ll1 <- diag(coeff.hat[,"lambda1"])
-        if("lambda2"%in%dimnames(res.fit$coeff.hat)[[2]]){
-          coeff.hat[indici.correzione,"lambda2"] <- 0
-          ll2 <- diag(coeff.hat[,"lambda2"])%*%res.fit$data$W
-        }
-        matrice2 <- ll1+ll2
-      }
-      # else{
-      #   indici.correzione <- sort(res.fit$coeff.hat[,"lambda0"], decreasing=TRUE, index.return=TRUE)$ix[1:sum( Mod(eigenA)>1)]
-      #   indici.ordinamento <- rep(FALSE, pp); indici.ordinamento[indici.correzione] <- TRUE
-      #   coeff.hat[indici.ordinamento,"lambda0"] <- 0
-      #   matrice1 <- solve(diag(rep(1, pp))-diag(coeff.hat[,"lambda0"])%*%res.fit$data$W)
-      # }
+  ## correction dei coefficienti stimati, per migliorare la stazionarietà del processo stimato
+  if(correction & Mod(eigenA)[1]>1){
+    if("lambda0"%in%dimnames(res.fit$coeff.hat)[[2]]){
+      indici1 <- coeff.hat[,"lambda0"]>1 & abs(coeff.hat[,"lambda0"]+coeff.hat[,"lambda1"]+coeff.hat[,"lambda2"])>1
+      indici.correction[indici1] <- 1
+      coeff.hat[indici1,"lambda0"] <- 1
+      indici1 <- coeff.hat[,"lambda0"]<(-1) & abs(coeff.hat[,"lambda0"]+coeff.hat[,"lambda1"]+coeff.hat[,"lambda2"])>1
+      indici.correction[indici1] <- 1
+      coeff.hat[indici1,"lambda0"] <- -1
+      ll0 <- diag(coeff.hat[,"lambda0"])%*%res.fit$data$W
     }
-    # else if("lambda0"%in%dimnames(res.fit$coeff.hat)[[2]]){
-    #   indici.correzione <- sort(res.fit$coeff.hat[,"lambda0"], decreasing=TRUE, inder.return=TRUE)$ix[1:sum( Mod(eigenA)>1)]
-    #   indici.ordinamento <- rep(FALSE, pp); indici.ordinamento[indici.correzione] <- TRUE
-    #   coeff.hat[indici.ordinamento,"lambda0"] <- 0
-    #   matrice1 <- solve(diag(rep(1, pp))-diag(coeff.hat[,"lambda0"])%*%res.fit$data$W)
-    # }
-    # indici.correzione <- rep(FALSE, pp)
-    # indici.correzione[indici.ordinamento] <- TRUE
-    if("fixed_effects"%in%dimnames(res.fit$coeff.hat)[[2]]){
-      B <- diag(rep(1, pp))-ll0-ll1-ll2
-      coeff.hat[,"fixed_effects"] <- B%*%mu
+    if("lambda1"%in%dimnames(res.fit$coeff.hat)[[2]]){
+      indici1 <- coeff.hat[,"lambda1"]>0.9 & abs(coeff.hat[,"lambda0"]+coeff.hat[,"lambda1"]+coeff.hat[,"lambda2"])>1
+      indici.correction[indici1] <- 1
+      coeff.hat[indici1,"lambda1"] <- 0.9
+      indici1 <- coeff.hat[,"lambda1"]<(-0.9) & abs(coeff.hat[,"lambda0"]+coeff.hat[,"lambda1"]+coeff.hat[,"lambda2"])>1
+      indici.correction[indici1] <- 1
+      coeff.hat[indici1,"lambda1"] <- -0.9
+      if("lambda2"%in%dimnames(res.fit$coeff.hat)[[2]]){
+        indici1 <- coeff.hat[,"lambda2"]<(-0.9) & abs(coeff.hat[,"lambda0"]+coeff.hat[,"lambda1"]+coeff.hat[,"lambda2"])>1
+        indici.correction[indici1] <- 1
+        coeff.hat[indici1,"lambda2"] <- -0.9
+        indici1 <- coeff.hat[,"lambda2"]>0.9 & abs(coeff.hat[,"lambda0"]+coeff.hat[,"lambda1"]+coeff.hat[,"lambda2"])>1
+        indici.correction[indici1] <- 1
+        coeff.hat[indici1,"lambda2"] <- 0.9
+        ll2 <- diag(coeff.hat[,"lambda2"])%*%res.fit$data$W
+      }
+      ll1 <- diag(coeff.hat[,"lambda1"])
+      if("fixed_effects"%in%dimnames(res.fit$coeff.hat)[[2]]){
+        B <- diag(rep(1, pp))-ll0-ll1-ll2
+        coeff.hat[,"fixed_effects"] <- B%*%mu
+      }
+      matrice2 <- ll1+ll2
+      vettore2 <- eigen(matrice2)$values
+      eigenA.post <- eigen(matrice1%*%matrice2)$values
     }
   }
-  eigenA <- eigen(matrice1%*%matrice2)$values
-  
   ## restituzione risultati
-  if(!correzione)
-    coeff.hat <- res.fit$coeff.hat
-  diagnostics <- cbind(indici.correzione, diagnostics, Mod(eigenA))
+  diagnostics <- cbind(eigen1=Mod(vettore1), eigen2=Mod(vettore2), Mod.eigenA=Mod(eigenA), correction=indici.correction, Mod.eigenA.post=Mod(eigenA.post))
   dimnames(diagnostics)[[1]] <- dimnames(coeff.hat)[[1]]
-  dimnames(diagnostics)[[2]] <- c("correction", "eigen1", "eigen2", "Mod.eigenA.pre", "Mod.eigenA.post")
   list(pp=pp, nn=nn, kk=kk, coeff.hat=coeff.hat, diagnostics=data.frame(diagnostics))
 }
 
 
-test.sdpd.model <- function (res.fit, model=NULL, correzione=FALSE, H0=c("zero", "constant", "grouped", "nospatial", "noautoregressive", "noX", "constrained")[1],
-                             method=c("k-FDR", "percentile", "normal basic")[1],
-                             group.index=rep(1, dim(res.fit$fitted)[1]), opts.plot=list(boot.plot=TRUE, ylimiti=NULL, label.index=NULL), 
-                             n.boot=299, coeff.true=0) 
+
+test.sdpd.model <- function (res.fit, mu.level.test=TRUE, model=NULL, correction=FALSE, indici.correction=NULL, H0=c("zero", "constant", "grouped", "nospatial", "noautoregressive", "noX", "constrained")[1],
+                             method=c("k-FDR", "percentile", "normal basic")[1], markovian=TRUE,
+                             group.index=rep(1, dim(res.fit$fitted)[1]), opts.plot=list(boot.plot=FALSE, cartel="", ylimiti=NULL, label.index=NULL), 
+                             n.boot=399, coeff.true=0) 
 {
-	## H0=("constant", "grouped", ....) denotes the kind of hypothesis tested under the null.
+  ## H0=("constant", "grouped", ....) denotes the kind of hypothesis tested under the null.
   if(is.null(model))
     model <- res.fit$model
   beta.names <- names(model$beta.coeffs)[model$beta.coeffs]
-
-  data <- check.sdpd.model(res.fit, correzione=correzione)
+  
+  data <- check.sdpd.model(res.fit, correction=correction, indici=indici.correction)
   error	<- warning <- character(20)
   n.error	<- n.warning <- 0
-
+  mu <- apply(res.fit$data$series, 1, mean)
+  mu.around <- res.fit$mu.around
+  mu.i <- res.fit$mu.i
+  if(mu.level.test) dim.temp <- 4 else dim.temp <- 0
+  
   ### sample distribution approximation based on residual bootstrap
   if(n.boot>20){
     indici.tx <- apply(res.fit$resid, 2, FUN=function(x){sum(is.na(x))})
     resid <- res.fit$resid[,indici.tx==0]
     i.resid	<- seq(1,dim(resid)[2])
     boot.ind 	<- matrix(sample(i.resid, size=(data$nn)*n.boot, replace = TRUE), nrow=n.boot)
-    boot.rep	<- array(0, dim=c(n.boot, data$pp, dim(res.fit$coeff.hat)[2]))	
-	  devs.tsboot <- matrix(0, nrow=n.boot, ncol=data$pp)
-    mu <- apply(res.fit$data$series, 1, mean)
+    boot.rep	<- array(0, dim=c(n.boot, data$pp, dim(res.fit$coeff.hat)[2]))
+    dimnames(boot.rep)[[3]] <- dimnames(res.fit$coeff.hat)[[2]]
+    devs.tsboot <- matrix(0, nrow=n.boot, ncol=data$pp)
     ## bootstrap iterations...
     for(bb in 1:n.boot){
       resid.boot <- resid[,boot.ind[bb,]]
-      resid.boot[,1] <- mu
-	    yy.star1 <- fit.sdpd.series(dseries=resid.boot, W=res.fit$data$W, X.centr=res.fit$data$X, model=model, lambda.hat=data$coeff.hat, resid=TRUE)$series
+      yy.star1 <- fit.sdpd.series(dseries=res.fit$data$series, W=res.fit$data$W, X.centr=res.fit$data$X, model=model, coeff.hat=data$coeff.hat, resid=resid.boot, markovian=markovian)$series
       COVs <- fit.sdpd.covs(series=yy.star1, X=res.fit$data$X, px.neighbors=res.fit$data$intorno, kk=data$kk, nn=data$nn, pp=data$pp)
-      boot.rep[bb,,] <- fit.sdpd.coefficients(W=res.fit$data$W, COVs=COVs, mu=mu, model=model)$coeff.hat
+      boot.rep[bb,,1:(dim(res.fit$coeff.hat)[2]-dim.temp)] <- fit.sdpd.coefficients(W=res.fit$data$W, COVs=COVs, mu=mu, model=model)$coeff.hat
       devs.tsboot[bb,] <- apply(yy.star1-res.fit$data$series, 1, sd)
+      if(mu.level.test){
+        mu.boot.around <- mu.around # res.fit$data$W%*%mu.boot
+        boot.rep[bb,,"intercept_norm"] <- boot.rep[bb,,"fixed_effects"]/((1-boot.rep[bb,,"lambda1"])*mu.boot.around)
+        boot.rep[bb,,"slope_norm"] <- (boot.rep[bb,,"lambda0"]+boot.rep[bb,,"lambda1"]+boot.rep[bb,,"lambda2"]-1)/(1-boot.rep[bb,,"lambda1"])
+        boot.rep[bb,,"abs_diff"] <- (boot.rep[bb,,"intercept_norm"]+boot.rep[bb,,"slope_norm"])*mu.boot.around
+        boot.rep[bb,,"norm_diff"] <- (boot.rep[bb,,"intercept_norm"]+boot.rep[bb,,"slope_norm"])
+      }
       if(bb%%300==0 & opts.plot$boot.plot){
         if(is.null(opts.plot$ylimiti))
           opts.plot$ylimiti <- range(res.fit$data$series)
         cat("\n boot iterations:", bb-300+1, "-", bb, "...one of the bootstrapped time series is plotted for control")
         jji <- sample((1:data$pp)[group.index==1], size=1)
-        titolo <- "True series (red) vs bootstrap series (black=full or green=partial)"
+        titolo <- "True series (red) vs bootstrap series (black)"
         titoloB <- NULL
-        if(data$kk>=1){
-          titolo <- paste(titolo, ", demeaned X1 series (blue)", sep="")
-          titoloB <- paste(", beta1=", round(res.fit$coeff.hat[jji,beta.names[1]], digits=3), sep="")
-        }
-        titolo <- paste(titolo, " and cc (fixed line)", sep="")
+        # if(data$kk>=1){
+        #   titolo <- paste(titolo, ", demeaned X1 series (blue)", sep="")
+        #   titoloB <- paste(", beta1=", round(res.fit$coeff.hat[jji,beta.names[1]], digits=3), sep="")
+        # }
+        # titolo <- paste(titolo, " and cc (fixed line)", sep="")
         titolo <- paste(titolo, " - location=", dimnames(res.fit$data$series)[[1]][jji], sep="")
         if(!is.null(opts.plot$label.index))
           titolo <- paste(titolo, " - group=", opts.plot$label.index[jji], sep="")
@@ -1143,111 +1220,103 @@ test.sdpd.model <- function (res.fit, model=NULL, correzione=FALSE, H0=c("zero",
           titolo <- paste(titolo, ", lambda1=", round(data$coeff.hat[jji,"lambda1"], digits=2), sep="")
         if("lambda2"%in%dimnames(res.fit$coeff.hat)[[2]])
           titolo <- paste(titolo, ", lambda2=", round(data$coeff.hat[jji,"lambda2"], digits=2), sep="")
-        titolo <- paste(titolo, titoloB, ") eigen=", round(data$diagnostics$Mod.eigenA.pre[1], digits=3), " eigen.post=", round(data$diagnostics$Mod.eigenA.post[1], digits=3), sep="")
+        titolo <- paste(titolo, titoloB, ") eigen=", round(data$diagnostics$Mod.eigenA[1], digits=3), sep="")
         if("lambda1"%in%dimnames(res.fit$coeff.hat)[[2]])
           titolo <- paste(titolo, ", #{|lambda1|>1}=", sum(ifelse(abs(res.fit$coeff.hat[,"lambda1"])>1, 1, 0)), sep="")
-        ts.plot(yy.star1[jji,], main=titolo, col=group.index[jji], ylim=opts.plot$ylimiti, ylab="temperatures")
+        nome.tsplot <- paste(opts.plot$cartel, opts.plot$label.index[jji], dimnames(res.fit$data$series)[[1]][jji], "bootplot_",bb , ".jpeg", sep="")
+        sottotitolo <- paste(res.fit$model$endogenous, "~H-SDPD  (based on data from ",
+                        dimnames(res.fit$data$series)[[2]][1], " to ", dimnames(res.fit$data$series)[[2]][2], sep="")
+        jpeg(file = nome.tsplot, width = 1100, height = 600)
+        ts.plot(yy.star1[jji,], col=group.index[jji], ylim=opts.plot$ylimiti, ylab="temperatures")
+        title(main=titolo, sub=sottotitolo, cex.main=1.5)
         lines(seq(1,data$nn), res.fit$data$series[jji,], col="red")
         abline(h=res.fit$coeff.hat[jji,"fixed_effects"])
         if(data$kk==1)
           lines(seq(1,data$nn), res.fit$data$X[jji,], col="blue", lty=2)
         else if(data$kk>1)
           lines(seq(1,data$nn), res.fit$data$X[beta.names[1],jji,], col="blue", lty=2)
+        dev.off()
       }
-	  }
-  
-    results <- lambda.cons <- array(0, dim=c(data$pp, dim(res.fit$coeff.hat)[2]))
-  	dimnames(results)[[1]] <- dimnames(lambda.cons)[[1]] <- dimnames(boot.rep)[[2]] <- dimnames(devs.tsboot)[[2]] <- dimnames(res.fit$coeff.hat)[[1]]
-  	dimnames(results)[[2]] <- dimnames(lambda.cons)[[2]] <- dimnames(boot.rep)[[3]] <- dimnames(res.fit$coeff.hat)[[2]]
-
-  	### definizione delle statistiche per le varie tipologie di ipotesi del test...
-
-		if(H0=="zero"|H0==1){
-			boot.cons <- boot.rep
-			boot.cons[,,] <- 0
-			lambda.cons[,] <- coeff.true
-  	}
-	  else if(H0=="constant"|H0==2){
-			boot.cons <- apply(boot.rep, c(1,3), FUN=function(x){rep(mean(x), length(x))})
-			boot.cons <- apply(boot.cons, c(1,3), FUN=function(x){x})
-			lambda.cons[,] <- apply(res.fit$coeff.hat, 2, FUN=function(x){rep(mean(x), length(x))})
-		}
-		else if(H0=="grouped"|H0==3){
-			fun.group <- function(x, index){
-			  x.cons <- x
-			  for(jj in 1:max(index))
-				  x.cons[index==jj] <- rep(mean(x[index==jj], sum(index==jj)))
-			  x.cons
-			}
-			boot.cons <- apply(boot.rep, c(1,3), FUN=fun.group, index=group.index)
-			boot.cons <- apply(boot.cons, c(1,3), FUN=function(x){x})
-			lambda.cons[,] <- apply(res.fit$coeff.hat, 2, FUN=fun.group, index=group.index)
-  	}
-		else if(H0=="nospatial"|H0==4){
-			boot.cons <- boot.rep
-			boot.cons[,,c("lambda0", "lambda2")] <- 0
-			lambda.cons[,] <- res.fit$coeff.hat; lambda.cons[,c("lambda0", "lambda2")] <- 0
-		}
-		else if(H0=="noautoregressive"|H0==5){
-			boot.cons <- boot.rep
-			boot.cons[,,"lambda1"] <- 0
-			lambda.cons[,] <- res.fit$coeff.hat; lambda.cons[,"lambda1"] <- 0
-		}
-		else if(H0=="noX"|H0==6){
-			boot.cons <- boot.rep
-			boot.cons[,,beta.names] <- 0
-			lambda.cons[,] <- res.fit$coeff.hat; lambda.cons[,beta.names] <- 0
-		}
-  	else if(H0=="constrain"|H0==7){
-  	  boot.cons <- boot.rep
-  	  boot.cons[,,"lambda1"] <- -1*boot.rep[,,"lambda2"]
-  	  boot.cons[,,"lambda2"] <- -1*boot.rep[,,"lambda1"]
-  	  lambda.cons[,] <- 0
-  	}
-  	else{
-			n.error <- n.error + 1
-			error[n.error] <- paste("The null hypothesis", H0, "is not available...")
-		}
-		### summary of bootstrap distribution
-		statistica 	<- res.fit$coeff.hat - lambda.cons
-		boot.rep		<- boot.rep-boot.cons
+    }
+    
+    results <- lambda.cons <- array(0, dim=c(data$pp, dim(boot.rep)[3]))
+    dimnames(results)[[1]] <- dimnames(lambda.cons)[[1]] <- dimnames(boot.rep)[[2]] <- dimnames(devs.tsboot)[[2]] <- dimnames(res.fit$coeff.hat)[[1]]
+    dimnames(results)[[2]] <- dimnames(lambda.cons)[[2]] <- dimnames(res.fit$coeff.hat)[[2]]
+    
+    ### definizione delle statistiche per le varie tipologie di ipotesi del test...
+    if(H0=="zero"|H0==1){
+      boot.cons <- boot.rep
+      boot.cons[,,] <- 0
+      lambda.cons[,] <- coeff.true
+    }
+    else if(H0=="constant"|H0==2){
+      boot.cons <- apply(boot.rep, c(1,3), FUN=function(x){rep(mean(x), length(x))})
+      boot.cons <- apply(boot.cons, c(1,3), FUN=function(x){x})
+      lambda.cons[,] <- apply(res.fit$coeff.hat, 2, FUN=function(x){rep(mean(x), length(x))})
+    }
+    else if(H0=="grouped"|H0==3){
+      fun.group <- function(x, index){
+        x.cons <- x
+        for(jj in 1:max(index))
+          x.cons[index==jj] <- rep(mean(x[index==jj], sum(index==jj)))
+        x.cons
+      }
+      boot.cons <- apply(boot.rep, c(1,3), FUN=fun.group, index=group.index)
+      boot.cons <- apply(boot.cons, c(1,3), FUN=function(x){x})
+      lambda.cons[,] <- apply(res.fit$coeff.hat, 2, FUN=fun.group, index=group.index)
+    }
+    else if(H0=="nospatial"|H0==4){
+      boot.cons <- boot.rep
+      boot.cons[,,c("lambda0", "lambda2")] <- 0
+      lambda.cons[,] <- res.fit$coeff.hat; lambda.cons[,c("lambda0", "lambda2")] <- 0
+    }
+    else if(H0=="noautoregressive"|H0==5){
+      boot.cons <- boot.rep
+      boot.cons[,,"lambda1"] <- 0
+      lambda.cons[,] <- res.fit$coeff.hat; lambda.cons[,"lambda1"] <- 0
+    }
+    else if(H0=="noX"|H0==6){
+      boot.cons <- boot.rep
+      boot.cons[,,beta.names] <- 0
+      lambda.cons[,] <- res.fit$coeff.hat; lambda.cons[,beta.names] <- 0
+    }
+    else if(H0=="constrain"|H0==7){
+      boot.cons <- boot.rep
+      boot.cons[,,"lambda1"] <- -1*boot.rep[,,"lambda2"]
+      boot.cons[,,"lambda2"] <- -1*boot.rep[,,"lambda1"]
+      lambda.cons[,] <- 0
+    }
+    else{
+      n.error <- n.error + 1
+      error[n.error] <- paste("The null hypothesis", H0, "is not available...")
+    }
+    ### summary of bootstrap distribution
+    statistica 	<- res.fit$coeff.hat - lambda.cons
+    boot.rep		<- boot.rep-boot.cons
     fun.BOOT <- function(x){
       # statistiche di sintesi del vettore di repliche bootstrap x
       nNAx <- sum(is.na(x))
       sdx <- sd(x, na.rm=T)
       mx <- mean(x, na.rm=T)
       if(nNAx==0)
-        pvalue <- 0 # shapiro.test(x)$p.value
+        pvalue <- tseries::jarque.bera.test(x)$p.value
       else
         pvalue <- NA
       c(mx, sdx, pvalue, nNAx)
     }
-    fun.BOOT3 <- function(x){
-      if(!is.na(mean(x, na.rm=T))){
-        if(mean(x, na.rm=T)>0)
-          res <- ifelse(x<0, 1, 0)
-        else
-          res <- ifelse(x>0, 1, 0)
-      }
-      else res <- rep(NA, length(x))
-      res
-    }
     boot <- apply(boot.rep, c(2,3), fun.BOOT)
     devs.tsboot <- apply(devs.tsboot, 2, fun.BOOT)
-    dist <- apply(boot.rep, c(2,3), FUN=function(x){x-mean(x, na.rm=T)})
-    for(ii in 1:n.boot){
-      dist[ii,,] <- dist[ii,,]+statistica
-    }
-    dist <- apply(dist, c(2,3), fun.BOOT3)
-    pvalue <- apply(dist, c(2,3), mean)
-    dimnames(boot)[[1]] <- dimnames(devs.tsboot)[[1]] <- c("bias.boot", "sd.boot", "pvSWnormaltest.boot", "NAs.boot")
+    dimnames(boot)[[1]] <- dimnames(devs.tsboot)[[1]] <- c("bias.boot", "sd.boot", "pvJBnormaltest.boot", "NAs.boot")
+    ### metodo del normal basic bootstrap
+    pvalue <- 2*pnorm(0, mean=abs(statistica/boot["sd.boot",,]), lower.tail = TRUE)
+    ### risultati:
     dimnames(pvalue)[[1]] <- dimnames(boot)[[2]]
     dimnames(pvalue)[[2]] <- dimnames(boot)[[3]]
     boot["bias.boot",,] <- boot["bias.boot",,] - res.fit$coeff.hat
   }
   else return(error="n. repliche bootstrap insufficienti")
   
-	#### restituzione risultati
-	list(pvalue=pvalue, diagnostics=data$diagnostics, coeff.H0=lambda.cons, H0=H0, method=method, coeff.hat=res.fit$coeff.hat, coeff.boot=boot, sdevs.tsboot=devs.tsboot, alpha=alpha, n.boot=n.boot, errors=error[error!=""])
+  #### restituzione risultati
+  list(pvalue=pvalue, mu.i=mu.i, mu.around=mu.around, diagnostics=data$diagnostics, coeff.H0=lambda.cons, H0=H0, method=method, coeff.hat=res.fit$coeff.hat, coeff.boot=boot, sdevs.tsboot=devs.tsboot, n.boot=n.boot, errors=error[error!=""])
 }
 

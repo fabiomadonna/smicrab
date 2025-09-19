@@ -65,19 +65,32 @@ CreateFullDataset <- function(data_df){
 }
 
 
-
-plotVarSpatial <- function(varName,datePoint,data, pars){
-  # Plot a spatial map for a given variable at a given time point
-  new.date <- paste(substr(datePoint, 1, 4),substr(datePoint, 6, 7), substr(datePoint, 9,10), sep=".") 
-  plt <- data|>
-    select(Latitude=latitude, Longitude=longitude, value=paste("X", new.date, sep="")) |>
-    ggplot(aes(x = Longitude, y =  Latitude)) +
-    geom_point(aes(colour = value), size=0.8) +
-    scale_colour_gradientn(colours=pars$colori, limits=pars$limiti) + 
-    labs(title = paste("Monthly mean value of", varName), subtitle=paste("Observed on ", substr(datePoint, 1, 7)), colour=pars$unit)
-  plt
+plotVarSpatial <- function(varName, datePoint, data, pars, bool_dynamic = FALSE, output_path) {
+  new.date <- paste(substr(datePoint, 1, 4), substr(datePoint, 6, 7), substr(datePoint, 9, 10), sep = ".")
+  
+  # Dynamically select the value column (e.g., "X2023.07.01")
+  value_col <- paste0("X", new.date)
+  
+  plt <- data %>%
+    rename(Latitude = latitude, Longitude = longitude) %>%
+    mutate(value = .data[[value_col]]) %>%
+    ggplot(aes(x = Longitude, y = Latitude)) +
+    geom_point(aes(colour = value), size = size.point) +
+    scale_colour_gradientn(colours = pars$colori, limits = pars$limiti) +
+    labs(
+      title = paste("Monthly mean value of", varName),
+      subtitle = paste("Observed on", substr(datePoint, 1, 7)),
+      colour = pars$unit
+    ) +
+    theme_bw()
+  
+  if (bool_dynamic) {
+    interactive_plot <- plotly::ggplotly(plt)
+    htmlwidgets::saveWidget(interactive_plot, file = output_path)
+  } else {
+    ggsave(filename = output_path, plot = plt, width = 8, height = 6)
+  }
 }
-
 
 plotVarSpatial2 <- plotVarSpatial
 
@@ -113,33 +126,41 @@ plotVarSpatial2 <- plotVarSpatial
 # }
 
 
-PlotComponentsSTL_nonest_lonlat2 <- function(lat,lon,varName,data, pars){
-  # Plot TS components using STL
-  data_df <- data |>
-    mutate(Latitude=round(latitude,1)) |>
-    mutate(Longitude=round(longitude,1)) |>
-    filter(Latitude==round(lat,1),Longitude==round(lon,1)) |>
-    select(-c(Latitude, Longitude))
 
+PlotComponentsSTL_nonest_lonlat2 <- function(lat, lon, varName, data, pars, bool_dynamic = FALSE, output_path) {
+  # Filter and prepare data
+  data_df <- data %>%
+    mutate(Latitude = round(latitude, 1)) %>%
+    mutate(Longitude = round(longitude, 1)) %>%
+    filter(Latitude == round(lat, 1), Longitude == round(lon, 1)) %>%
+    select(-c(Latitude, Longitude))
+  
   data_df <- CreateLongDF(data_df)
   data_nested_df <- CreateNestedDF(data_df)
-
-  temp_data <- data_nested_df$data[[1]] |>
+  
+  temp_data <- data_nested_df$data[[1]] %>%
     mutate(Month = yearmonth(Date))
   
   from.to <- range(temp_data$Month)
   
-  temp_data|>
-    as_tsibble(index = Month) |>
-    model(STL(value ~ season(period = 12), robust = TRUE)) |>
-    components() |>
+  # Create STL decomposition plot
+  base_plot <- temp_data %>%
+    as_tsibble(index = Month) %>%
+    model(STL(value ~ season(period = 12), robust = TRUE)) %>%
+    components() %>%
     autoplot() +
-    ggtitle(paste(varName,"(STL decomposition)")) +
-    guides(x = guide_axis(minor.ticks = TRUE, angle = 0, check.overlap=FALSE)) + 
-    labs(caption = paste("(based on data from ", from.to[1], " to ", from.to[2], ")", sep="")) + 
+    ggtitle(paste(varName, "(STL decomposition)")) +
+    guides(x = guide_axis(minor.ticks = TRUE, angle = 0, check.overlap = FALSE)) +
+    labs(caption = paste("(based on data from ", from.to[1], " to ", from.to[2], ")", sep = "")) +
     theme_bw()
+  
+  if (bool_dynamic) {
+    interactive_plot <- plotly::ggplotly(base_plot)
+    htmlwidgets::saveWidget(interactive_plot, file = output_path)
+  } else {
+    ggsave(filename = output_path, plot = base_plot, width = 8, height = 6)
+  }
 }
-
 
 estimateTemporalModel <- function(obj_ts,modelFormula){
   # Estimate a Trend + Season + ARMA model on original time series
