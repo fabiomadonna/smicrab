@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { getUserAnalysesAction } from "@/actions";
 import { AnalysesList } from "@/components/analysis/analyses-list";
 import { getCurrentUser } from "@/actions/auth.actions";
