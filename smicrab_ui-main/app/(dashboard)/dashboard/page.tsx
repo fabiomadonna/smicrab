@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { CreateAnalysisButton } from "@/components/analysis/create-analysis-button";
 import { Button } from "@/components/ui/button";
 import {
