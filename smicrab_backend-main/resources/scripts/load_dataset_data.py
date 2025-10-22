@@ -86,91 +86,89 @@ class DatasetProcessor:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
             return False
 
-    def insert_datasets_to_db(self) -> bool:
-        """Insert processed datasets metadata into PostgreSQL."""
-        try:
-            if not self.datasets_metadata:
-                logger.warning("WARNING: No datasets metadata to insert")
-                return False
+def insert_datasets_to_db(self) -> bool:
+    """Insert processed datasets metadata into PostgreSQL."""
+    import numpy as np
+    from psycopg2.extras import Json
 
-            insert_query = """
-            INSERT INTO datasets (
-                id, name, raster, variable_name, from_timestamp, to_timestamp,
-                longitude_from, longitude_to, latitude_from, latitude_to,
-                frequency, grid_resolution, file_path, file_size_mb,
-                dimensions, data_vars, time_coords
-            ) VALUES (
-                %(id)s, %(name)s, %(raster)s, %(variable_name)s, %(from_timestamp)s, %(to_timestamp)s,
-                %(longitude_from)s, %(longitude_to)s, %(latitude_from)s, %(latitude_to)s,
-                %(frequency)s, %(grid_resolution)s, %(file_path)s, %(file_size_mb)s,
-                %(dimensions)s, %(data_vars)s, %(time_coords)s
-            )
-            ON CONFLICT (variable_name) DO NOTHING
-            """
+    def sanitize_json(data):
+        """Convert NumPy types to native Python types for JSON serialization"""
+        if isinstance(data, dict):
+            return {k: sanitize_json(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [sanitize_json(v) for v in data]
+        elif isinstance(data, np.generic):
+            return data.item()
+        else:
+            return data
 
-            conn = psycopg2.connect(**DATABASE_CONFIG)
-            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-            cur = conn.cursor()
+    try:
+        if not self.datasets_metadata:
+            logger.warning("WARNING: No datasets metadata to insert")
+            return False
 
-            inserted_count = 0
-            skipped_count = 0
+        insert_query = """
+        INSERT INTO datasets (
+            id, name, raster, variable_name, from_timestamp, to_timestamp,
+            longitude_from, longitude_to, latitude_from, latitude_to,
+            frequency, grid_resolution, file_path, file_size_mb,
+            dimensions, data_vars, time_coords
+        ) VALUES (
+            %(id)s, %(name)s, %(raster)s, %(variable_name)s, %(from_timestamp)s, %(to_timestamp)s,
+            %(longitude_from)s, %(longitude_to)s, %(latitude_from)s, %(latitude_to)s,
+            %(frequency)s, %(grid_resolution)s, %(file_path)s, %(file_size_mb)s,
+            %(dimensions)s, %(data_vars)s, %(time_coords)s
+        )
+        ON CONFLICT (variable_name) DO NOTHING
+        """
 
-            for metadata in self.datasets_metadata:
+        conn = psycopg2.connect(**DATABASE_CONFIG)
+        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+
+        inserted_count = 0
+        skipped_count = 0
+
+        for metadata in self.datasets_metadata:
+            try:
+                metadata['grid_resolution'] = str(metadata.get('grid_resolution', '0.1'))
+
+                for ts_key in ['from_timestamp', 'to_timestamp']:
+                    if not isinstance(metadata[ts_key], datetime):
+                        metadata[ts_key] = pd.to_datetime(metadata[ts_key]).to_pydatetime()
+
+                metadata_copy = metadata.copy()
+                metadata_copy["dimensions"] = Json(sanitize_json(metadata["dimensions"]))
+                metadata_copy["data_vars"] = Json(sanitize_json(metadata["data_vars"]))
+                metadata_copy["time_coords"] = Json(sanitize_json(metadata["time_coords"]))
+
                 try:
-                    # Ensure grid_resolution is a string
-                    metadata['grid_resolution'] = str(metadata.get('grid_resolution', '0.1'))
-
-                    # Convert timestamps to datetime objects if they are not already
-                    for ts_key in ['from_timestamp', 'to_timestamp']:
-                        if not isinstance(metadata[ts_key], datetime):
-                            metadata[ts_key] = pd.to_datetime(metadata[ts_key]).to_pydatetime()
-
-                    # Prepare JSON fields
-                    metadata_copy = metadata.copy()
-                    metadata_copy["dimensions"] = Json(metadata["dimensions"])
-                    metadata_copy["data_vars"] = Json(metadata["data_vars"])
-                    metadata_copy["time_coords"] = Json(metadata["time_coords"])
-
-                    try:
-                        cur.execute(insert_query, metadata_copy)
-
-                        # Check if this was an insert or skipped
-                        if cur.rowcount > 0:
-                            inserted_count += 1
-                            logger.debug(
-                                f"Inserted: {metadata['variable_name']} from {metadata['name']}"
-                            )
-                        else:
-                            skipped_count += 1
-                            logger.debug(
-                                f"Skipped (already exists): {metadata['variable_name']} from {metadata['name']}"
-                            )
-
-                    except psycopg2.Error as db_error:
-                        logger.error(f"Database error for {metadata.get('variable_name', 'unknown')}: {db_error}")
-                        # Continue processing other variables
-                        continue
-
-                except Exception as var_error:
-                    logger.error(f"Error processing variable {metadata.get('variable_name', 'unknown')}: {var_error}")
-                    # Continue processing other variables
+                    cur.execute(insert_query, metadata_copy)
+                    if cur.rowcount > 0:
+                        inserted_count += 1
+                        logger.debug(f"Inserted: {metadata['variable_name']} from {metadata['name']}")
+                    else:
+                        skipped_count += 1
+                        logger.debug(f"Skipped (already exists): {metadata['variable_name']} from {metadata['name']}")
+                except psycopg2.Error as db_error:
+                    logger.error(f"Database error for {metadata.get('variable_name', 'unknown')}: {db_error}")
                     continue
 
-            cur.close()
-            conn.close()
+            except Exception as var_error:
+                logger.error(f"Error processing variable {metadata.get('variable_name', 'unknown')}: {var_error}")
+                continue
 
-            logger.info(
-                f"Database operation completed: {inserted_count} variables processed, {skipped_count} skipped"
-            )
+        cur.close()
+        conn.close()
 
-            logger.info(
-                f"Successfully processed {len(self.datasets_metadata)} data variables"
-            )
-            return True
+        logger.info(f"Database operation completed: {inserted_count} variables processed, {skipped_count} skipped")
+        logger.info(f"Successfully processed {len(self.datasets_metadata)} data variables")
+        return True
 
-        except Exception as e:
-            logger.error(f"Failed to insert datasets into database: {e}")
-            return False
+    except Exception as e:
+        logger.error(f"Failed to insert datasets into database: {e}")
+        return False
+
 
     def extract_dataset_metadata(self, file_path: Path) -> List[Dict[str, Any]]:
         """Extract metadata from a NetCDF file using xarray, creating one record per data variable."""
