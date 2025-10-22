@@ -1,0 +1,15 @@
+.git
+.env
+.DS_Store
+.venv
+venv/
+__pycache__/
+datasets/
+datasets_info/
+processed_datasets/
+*.nc
+*.png
+*.idea
+*.log
+*.zip
+*.csv
